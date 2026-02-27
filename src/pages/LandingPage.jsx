@@ -198,7 +198,7 @@ export default function LandingPage({ onOpenAuth }) {
             <div className="w-6 h-6 bg-brand-600 rounded-md flex items-center justify-center">
               <Rss className="w-3 h-3 text-white" />
             </div>
-            <span className="text-sm font-medium text-stone-700">myFeed</span>
+            <span className="text-sm font-medium"><span className="text-stone-700">my</span><span className="text-brand-600">Feed</span></span>
           </div>
           <p className="text-xs text-stone-400">© 2026 myFeed. All rights reserved.</p>
         </div>

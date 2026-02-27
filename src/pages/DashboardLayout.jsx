@@ -5,6 +5,9 @@ import Sidebar from '../components/Sidebar'
 import AddFeedModal from '../components/AddFeedModal'
 import SearchModal from '../components/SearchModal'
 import KeyboardShortcutsModal from '../components/KeyboardShortcutsModal'
+import InstallPrompt from '../components/InstallPrompt'
+import FeedDiscoveryModal from '../components/FeedDiscoveryModal'
+import NewsletterModal from '../components/NewsletterModal'
 import { UnreadProvider, useUnread } from '../contexts/UnreadContext'
 import { ThemeProvider } from '../contexts/ThemeContext'
 import { SettingsProvider } from '../contexts/SettingsContext'
@@ -17,6 +20,8 @@ function DashboardContent() {
   const { user } = useAuth()
   const { refreshUnreadCount } = useUnread()
   const [showAdd, setShowAdd] = useState(false)
+  const [showDiscover, setShowDiscover] = useState(false)
+  const [showNewsletter, setShowNewsletter] = useState(false)
   const [showSearch, setShowSearch] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
@@ -72,6 +77,8 @@ function DashboardContent() {
     <div className="min-h-screen bg-[#fafaf9] dark:bg-stone-950 flex">
       <Sidebar
         onAddFeed={() => setShowAdd(true)}
+        onDiscover={() => setShowDiscover(true)}
+        onNewsletter={() => setShowNewsletter(true)}
         onSearch={openSearch}
         onHelp={openHelp}
         mobileOpen={mobileSidebarOpen}
@@ -84,8 +91,8 @@ function DashboardContent() {
           <button onClick={() => setMobileSidebarOpen(true)} className="p-2 text-stone-500 hover:text-stone-700 dark:text-stone-400 dark:hover:text-stone-200 rounded-lg hover:bg-stone-50 dark:hover:bg-stone-800 transition-colors">
             <Menu className="w-5 h-5" />
           </button>
-          <span className="font-display font-bold text-lg text-stone-900 dark:text-stone-100">
-            my<span className="text-brand-600">Feed</span>
+          <span className="font-display font-bold text-lg">
+            <span className="text-stone-900 dark:text-stone-100">my</span><span className="text-brand-600">Feed</span>
           </span>
           <button onClick={openSearch} className="p-2 text-stone-500 hover:text-stone-700 dark:text-stone-400 dark:hover:text-stone-200 rounded-lg hover:bg-stone-50 dark:hover:bg-stone-800 transition-colors">
             <Search className="w-5 h-5" />
@@ -119,6 +126,9 @@ function DashboardContent() {
         </footer>
       </div>
 
+      <InstallPrompt />
+      {showNewsletter && <NewsletterModal onClose={() => setShowNewsletter(false)} onAdded={() => { setShowNewsletter(false); setRefreshKey(k => k + 1); refreshUnreadCount() }} />}
+      {showDiscover && <FeedDiscoveryModal onClose={() => setShowDiscover(false)} onAdded={() => { setShowDiscover(false); setRefreshKey(k => k + 1); refreshUnreadCount() }} />}
       {showAdd && <AddFeedModal onClose={() => setShowAdd(false)} onAdded={handleAdded} />}
       {showSearch && <SearchModal onClose={() => setShowSearch(false)} />}
       {showHelp && <KeyboardShortcutsModal onClose={() => setShowHelp(false)} />}

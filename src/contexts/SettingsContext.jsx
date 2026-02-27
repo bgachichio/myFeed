@@ -44,7 +44,7 @@ const DEFAULT_SETTINGS = {
   emailNotifications: false,
 }
 
-// ── localStorage cache — instant load, no flash ──────────────────
+// ── localStorage helpers ──────────────────────────────────────────
 function loadCached() {
   try {
     const raw = localStorage.getItem('myfeed-settings')
@@ -57,6 +57,73 @@ function saveCache(s) {
   try { localStorage.setItem('myfeed-settings', JSON.stringify(s)) } catch {}
 }
 
+// ── Row mapper: DB columns → app object ──────────────────────────
+function dbToSettings(data) {
+  return {
+    ...DEFAULT_SETTINGS,
+    displayName:        data.display_name        || '',
+    fontId:             data.font_id             || 'inter',
+    dateFormat:         data.date_format         || 'relative',
+    timeFormat:         data.time_format         || '12h',
+    timezone:           data.timezone            || DEFAULT_SETTINGS.timezone,
+    compactMode:        data.compact_mode        ?? false,
+    showReadingTime:    data.show_reading_time   ?? true,
+    showAuthor:         data.show_author         ?? true,
+    articlesPerPage:    data.articles_per_page   || 20,
+    emailNotifications: data.email_notifications ?? false,
+  }
+}
+
+// ── Row mapper: app object → DB columns ──────────────────────────
+function settingsToDb(s, userId) {
+  return {
+    id:                  userId,
+    display_name:        s.displayName,
+    font_id:             s.fontId,
+    date_format:         s.dateFormat,
+    time_format:         s.timeFormat,
+    timezone:            s.timezone,
+    compact_mode:        s.compactMode,
+    show_reading_time:   s.showReadingTime,
+    show_author:         s.showAuthor,
+    articles_per_page:   s.articlesPerPage,
+    email_notifications: s.emailNotifications,
+    updated_at:          new Date().toISOString(),
+  }
+}
+
+// ── Write to Supabase: explicit SELECT → INSERT or UPDATE ─────────
+// More reliable than upsert: splits the operation so each RLS policy
+// (INSERT vs UPDATE) is exercised unambiguously.
+// In Supabase JS v2, omitting .select() after insert/update means no
+// rows are returned — equivalent to "returning minimal". No options needed.
+async function persistToDb(settings, userId) {
+  // 1. Lightweight existence check — HEAD request, no row data returned
+  const { count, error: countErr } = await supabase
+    .from('profiles')
+    .select('id', { count: 'exact', head: true })
+    .eq('id', userId)
+
+  if (countErr) throw new Error(`DB read check failed: ${countErr.message}`)
+
+  const row = settingsToDb(settings, userId)
+
+  if (count === 0) {
+    // No row yet — INSERT (v2: no second arg, no .select() = no return data)
+    const { error } = await supabase
+      .from('profiles')
+      .insert(row)
+    if (error) throw new Error(`Insert failed: ${error.message}`)
+  } else {
+    // Row exists — UPDATE (v2: no second arg, no .select() = no return data)
+    const { error } = await supabase
+      .from('profiles')
+      .update(row)
+      .eq('id', userId)
+    if (error) throw new Error(`Update failed: ${error.message}`)
+  }
+}
+
 // ── Context ───────────────────────────────────────────────────────
 const SettingsContext = createContext({})
 
@@ -64,45 +131,36 @@ export function SettingsProvider({ children }) {
   const { user } = useAuth()
   const [settings, setSettings] = useState(loadCached)
   const [loadingSettings, setLoadingSettings] = useState(true)
-  // Keep a ref so updateSettings always has the latest value without stale closures
   const settingsRef = useRef(settings)
   useEffect(() => { settingsRef.current = settings }, [settings])
 
   // ── Load from Supabase on login ───────────────────────────────
   useEffect(() => {
     if (!user) { setLoadingSettings(false); return }
-    const load = async () => {
+    ;(async () => {
       try {
         const { data, error } = await supabase
           .from('profiles')
           .select('*')
           .eq('id', user.id)
-          .single()
+          .maybeSingle()  // returns null (not error) when no row exists
 
-        if (!error && data) {
-          const loaded = {
-            ...DEFAULT_SETTINGS,
-            displayName:      data.display_name        || '',
-            fontId:           data.font_id             || 'inter',
-            dateFormat:       data.date_format         || 'relative',
-            timeFormat:       data.time_format         || '12h',
-            timezone:         data.timezone            || DEFAULT_SETTINGS.timezone,
-            compactMode:      data.compact_mode        ?? false,
-            showReadingTime:  data.show_reading_time   ?? true,
-            showAuthor:       data.show_author         ?? true,
-            articlesPerPage:  data.articles_per_page   || 20,
-            emailNotifications: data.email_notifications ?? false,
-          }
+        if (error) throw error
+        if (data) {
+          const loaded = dbToSettings(data)
           setSettings(loaded)
           saveCache(loaded)
         }
-      } catch {}
-      finally { setLoadingSettings(false) }
-    }
-    load()
-  }, [user?.id]) // only re-run when user id changes, not on every render
+        // if data is null: no profile row yet — keep defaults, first save will INSERT
+      } catch (err) {
+        console.warn('Settings load failed:', err.message)
+      } finally {
+        setLoadingSettings(false)
+      }
+    })()
+  }, [user?.id])
 
-  // ── Apply font to <body> whenever fontId changes ──────────────
+  // ── Apply font ────────────────────────────────────────────────
   useEffect(() => {
     const font = FONTS.find(f => f.id === settings.fontId) || FONTS[0]
     if (font.googleParam && !document.getElementById(`gf-${font.id}`)) {
@@ -115,35 +173,14 @@ export function SettingsProvider({ children }) {
     document.body.style.fontFamily = font.stack
   }, [settings.fontId])
 
-  // ── Save — always reads from ref to avoid stale closure ───────
+  // ── Save ──────────────────────────────────────────────────────
   const updateSettings = useCallback(async (updates) => {
     const next = { ...settingsRef.current, ...updates }
     setSettings(next)
-    saveCache(next) // write to localStorage immediately
-
-    if (!user) return
-    try {
-      const { error } = await supabase.from('profiles').upsert({
-        id:                 user.id,
-        display_name:       next.displayName,
-        font_id:            next.fontId,
-        date_format:        next.dateFormat,
-        time_format:        next.timeFormat,
-        timezone:           next.timezone,
-        compact_mode:       next.compactMode,
-        show_reading_time:  next.showReadingTime,
-        show_author:        next.showAuthor,
-        articles_per_page:  next.articlesPerPage,
-        email_notifications:next.emailNotifications,
-        updated_at:         new Date().toISOString(),
-      })
-      if (error) throw error
-    } catch (err) {
-      // Supabase write failed — localStorage already saved so settings
-      // won't be lost for this session, but log for debugging
-      console.warn('Settings save failed:', err.message)
-    }
-  }, [user]) // only depends on user, not settings — ref handles the rest
+    saveCache(next)          // always write to localStorage first
+    if (!user) return        // not logged in — localStorage only
+    await persistToDb(next, user.id)  // throws on failure — callers must catch
+  }, [user])
 
   return (
     <SettingsContext.Provider value={{ settings, updateSettings, loadingSettings }}>

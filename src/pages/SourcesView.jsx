@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { Rss, Trash2, Plus, Globe, AlertCircle, Upload, Download, ChevronDown, Pencil, CheckCircle2, XCircle, Clock, GripVertical, RefreshCw } from 'lucide-react'
 import { formatDistanceToNow, parseISO } from 'date-fns'
 import { useAuth } from '../contexts/AuthContext'
-import { getFeeds, deleteFeed, getFolders } from '../lib/feedsService'
+import { getFeeds, deleteFeed } from '../lib/feedsService'
 import AddFeedModal from '../components/AddFeedModal'
 import ImportOPMLModal from '../components/ImportOPMLModal'
 import EditFeedModal from '../components/EditFeedModal'
@@ -51,7 +51,6 @@ function HealthBadge({ feed }) {
 export default function SourcesView() {
   const { user } = useAuth()
   const [feeds, setFeeds] = useState([])
-  const [folders, setFolders] = useState([])
   const [loading, setLoading] = useState(true)
   const [showAdd, setShowAdd] = useState(false)
   const [showImport, setShowImport] = useState(false)
@@ -71,9 +70,8 @@ export default function SourcesView() {
   const loadAll = async () => {
     setLoading(true)
     try {
-      const [feedData, folderData] = await Promise.all([getFeeds(user.id), getFolders(user.id)])
+      const feedData = await getFeeds(user.id)
       setFeeds(feedData)
-      setFolders(folderData)
     } catch (err) {
       setError(err.message)
     } finally {
@@ -105,7 +103,6 @@ export default function SourcesView() {
 
   // Group by folder for display
   const feedsByFolder = {}
-  folders.forEach(folder => { feedsByFolder[folder.id] = { folder, feeds: [] } })
   feedsByFolder['unfiled'] = { folder: { name: 'Unfiled' }, feeds: [] }
   feeds.forEach(feed => {
     if (feed.folder_id && feedsByFolder[feed.folder_id]) feedsByFolder[feed.folder_id].feeds.push(feed)
@@ -301,7 +298,6 @@ export default function SourcesView() {
         <EditFeedModal
           feed={editingFeed}
           existingCategories={allCategories}
-          folders={folders}
           onClose={() => setEditingFeed(null)}
           onUpdated={handleUpdated}
         />

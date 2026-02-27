@@ -15,8 +15,8 @@ export default function Navbar({ onOpenAuth }) {
           <div className="w-8 h-8 bg-brand-600 rounded-lg flex items-center justify-center">
             <Rss className="w-4 h-4 text-white" />
           </div>
-          <span className="font-display font-bold text-xl text-stone-900">
-            my<span className="text-brand-600">Feed</span>
+          <span className="font-display font-bold text-xl">
+            <span className="text-stone-900">my</span><span className="text-brand-600">Feed</span>
           </span>
         </div>
 

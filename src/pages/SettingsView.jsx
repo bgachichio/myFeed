@@ -1,7 +1,6 @@
-import { useState, useEffect } from 'react'
-import { User, Lock, Type, Calendar, Clock, Globe, Layout, Bell, Trash2, Check, Eye, EyeOff, AlertTriangle, ChevronDown } from 'lucide-react'
+import { useState, useEffect, useCallback } from 'react'
+import { User, Lock, Type, Calendar, Clock, Layout, Trash2, Check, Eye, EyeOff, AlertTriangle, Activity } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
-import { formatArticleDate } from '../lib/dateFormat'
 import { useSettings, FONTS, DATE_FORMATS, TIME_FORMATS, TIMEZONES } from '../contexts/SettingsContext'
 import { supabase } from '../lib/supabase'
 
@@ -37,7 +36,8 @@ function SaveButton({ loading, saved, onClick, label = 'Save changes' }) {
   return (
     <button onClick={onClick} disabled={loading}
       className="flex items-center gap-2 px-4 py-2 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700 transition-colors disabled:opacity-50">
-      {loading ? <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+      {loading
+        ? <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
         : saved ? <Check className="w-3.5 h-3.5" /> : null}
       {loading ? 'Saving...' : saved ? 'Saved!' : label}
     </button>
@@ -48,18 +48,146 @@ function StatusMsg({ msg }) {
   if (!msg) return null
   const isError = msg.type === 'error'
   return (
-    <p className={`text-xs mt-2 ${isError ? 'text-red-500 dark:text-red-400' : 'text-brand-600 dark:text-brand-400'}`}>
+    <p className={`text-xs ${isError ? 'text-red-500 dark:text-red-400' : 'text-brand-600 dark:text-brand-400'}`}>
       {msg.text}
     </p>
+  )
+}
+
+// ── Live diagnostic panel ─────────────────────────────────────────
+function DiagnosticPanel() {
+  const { user } = useAuth()
+  const [status, setStatus] = useState('idle')   // idle | checking | ok | error
+  const [detail, setDetail] = useState('')
+  const [rowData, setRowData] = useState(null)
+
+  const runCheck = useCallback(async () => {
+    if (!user) { setStatus('error'); setDetail('Not logged in — no user session.'); return }
+    setStatus('checking'); setDetail(''); setRowData(null)
+
+    try {
+      // Step 1: verify auth session is valid
+      const { data: { session }, error: sessErr } = await supabase.auth.getSession()
+      if (sessErr || !session) throw new Error('Auth session invalid or missing. Try signing out and back in.')
+
+      // Step 2: try to read profile row
+      const { data, error: readErr } = await supabase
+        .from('profiles')
+        .select('id, display_name, font_id, date_format, time_format, timezone, compact_mode, show_reading_time, show_author, articles_per_page, email_notifications, updated_at')
+        .eq('id', user.id)
+        .maybeSingle()
+      if (readErr) throw new Error(`SELECT failed: ${readErr.message} (code: ${readErr.code})`)
+
+      if (!data) {
+        // Step 3a: no row — try to insert one
+        const { error: insertErr } = await supabase
+          .from('profiles')
+          .insert({ id: user.id })
+        if (insertErr) throw new Error(`Profile row missing AND INSERT failed: ${insertErr.message} — RLS INSERT policy likely missing. Run migration v6 in Supabase SQL Editor.`)
+        setDetail('Profile row created successfully. Settings will now persist.')
+        setStatus('ok')
+        return
+      }
+
+      // Step 3b: row exists — try a test UPDATE
+      const { error: updateErr } = await supabase
+        .from('profiles')
+        .update({ updated_at: new Date().toISOString() })
+        .eq('id', user.id)
+      if (updateErr) throw new Error(`SELECT works but UPDATE failed: ${updateErr.message} (code: ${updateErr.code}) — RLS UPDATE policy likely missing. Run migration v6 in Supabase SQL Editor.`)
+
+      setRowData(data)
+      setDetail(`DB connection OK. Profile row exists. Last saved: ${data.updated_at ? new Date(data.updated_at).toLocaleString() : 'never'}.`)
+      setStatus('ok')
+
+    } catch (err) {
+      setStatus('error')
+      setDetail(err.message)
+    }
+  }, [user])
+
+  useEffect(() => { runCheck() }, [runCheck])
+
+  const colour = status === 'ok' ? 'text-brand-600 dark:text-brand-400'
+    : status === 'error' ? 'text-red-600 dark:text-red-400'
+    : 'text-stone-400 dark:text-stone-500'
+  const dot = status === 'ok' ? 'bg-brand-500'
+    : status === 'error' ? 'bg-red-500'
+    : 'bg-stone-300 dark:bg-stone-600'
+
+  return (
+    <div className="bg-white dark:bg-stone-900 border border-stone-100 dark:border-stone-800 rounded-2xl overflow-hidden">
+      <div className="px-6 py-5 border-b border-stone-50 dark:border-stone-800 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 bg-stone-50 dark:bg-stone-800 rounded-lg flex items-center justify-center flex-shrink-0">
+            <Activity className="w-4 h-4 text-stone-500 dark:text-stone-400" />
+          </div>
+          <div>
+            <h2 className="text-sm font-semibold text-stone-900 dark:text-stone-100">Settings Diagnostics</h2>
+            <p className="text-xs text-stone-400 dark:text-stone-500 mt-0.5">Live check of your database connection and permissions</p>
+          </div>
+        </div>
+        <button onClick={runCheck}
+          className="text-xs text-stone-400 hover:text-stone-600 dark:hover:text-stone-300 border border-stone-200 dark:border-stone-700 px-2.5 py-1 rounded-lg transition-colors">
+          Re-check
+        </button>
+      </div>
+      <div className="px-6 py-5 space-y-3">
+        <div className="flex items-center gap-2">
+          <span className={`w-2 h-2 rounded-full flex-shrink-0 ${dot} ${status === 'checking' ? 'animate-pulse' : ''}`} />
+          <span className={`text-xs font-medium ${colour}`}>
+            {status === 'idle' ? 'Not checked' :
+             status === 'checking' ? 'Checking...' :
+             status === 'ok' ? 'All systems go' : 'Problem detected'}
+          </span>
+        </div>
+        {detail && (
+          <p className={`text-xs leading-relaxed ${status === 'error' ? 'text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 p-3 rounded-lg' : 'text-stone-500 dark:text-stone-400'}`}>
+            {detail}
+          </p>
+        )}
+        {status === 'error' && detail.includes('migration') && (
+          <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-3 text-xs text-amber-800 dark:text-amber-300 space-y-1">
+            <p className="font-semibold">To fix: run Migration v6</p>
+            <p>1. Open your Supabase dashboard</p>
+            <p>2. Go to SQL Editor → New query</p>
+            <p>3. Paste the contents of <code className="bg-amber-100 dark:bg-amber-900/40 px-1 rounded">supabase_migration_v6.sql</code></p>
+            <p>4. Click Run, then come back and click Re-check above</p>
+          </div>
+        )}
+        {rowData && (
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            {[
+              ['User ID',            rowData.id?.slice(0, 12) + '...'],
+              ['Display name',       rowData.display_name       || '(none)'],
+              ['Font',               rowData.font_id            || 'inter'],
+              ['Date format',        rowData.date_format        || 'relative'],
+              ['Time format',        rowData.time_format        || '12h'],
+              ['Timezone',           rowData.timezone           || '(none)'],
+              ['Compact mode',       String(rowData.compact_mode        ?? false)],
+              ['Reading time',       String(rowData.show_reading_time   ?? true)],
+              ['Show author',        String(rowData.show_author         ?? true)],
+              ['Articles per page',  String(rowData.articles_per_page   || 20)],
+              ['Email notifs',       String(rowData.email_notifications ?? false)],
+              ['Last saved',         rowData.updated_at ? new Date(rowData.updated_at).toLocaleString() : 'never'],
+            ].map(([k, v]) => (
+              <div key={k} className="bg-stone-50 dark:bg-stone-800 rounded-lg p-2">
+                <p className="text-stone-400 dark:text-stone-500">{k}</p>
+                <p className="font-medium text-stone-700 dark:text-stone-300 truncate">{v}</p>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
   )
 }
 
 // ── Profile section ───────────────────────────────────────────────
 function ProfileSection() {
   const { user } = useAuth()
-  const { settings, updateSettings, loadingSettings } = useSettings()
+  const { settings, updateSettings } = useSettings()
   const [name, setName] = useState(settings.displayName)
-  // Resync when Supabase finishes loading
   useEffect(() => { setName(settings.displayName) }, [settings.displayName])
   const [loading, setLoading] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -69,15 +197,17 @@ function ProfileSection() {
     setLoading(true); setMsg(null)
     try {
       await updateSettings({ displayName: name.trim() })
-      setSaved(true); setTimeout(() => setSaved(false), 2000)
-    } catch { setMsg({ type: 'error', text: 'Failed to save. Please try again.' }) }
-    finally { setLoading(false) }
+      setSaved(true); setTimeout(() => setSaved(false), 2500)
+    } catch (err) {
+      setMsg({ type: 'error', text: `Save failed: ${err.message}` })
+    } finally { setLoading(false) }
   }
 
   return (
     <Section icon={User} title="Profile" description="Your display name shown in the app.">
       <Field label="Display name" hint="Only visible to you.">
         <input type="text" value={name} onChange={e => setName(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && handleSave()}
           placeholder="e.g. Brian"
           className="w-full px-3 py-2.5 border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 text-stone-900 dark:text-stone-100 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 placeholder-stone-400" />
       </Field>
@@ -111,16 +241,13 @@ function PasswordSection() {
     if (next !== confirm) return setMsg({ type: 'error', text: 'Passwords do not match.' })
     setLoading(true)
     try {
-      // Re-authenticate with current password first
       const { data: { user } } = await supabase.auth.getUser()
-      const { error: signInError } = await supabase.auth.signInWithPassword({
-        email: user.email, password: current,
-      })
+      const { error: signInError } = await supabase.auth.signInWithPassword({ email: user.email, password: current })
       if (signInError) throw new Error('Current password is incorrect.')
       const { error } = await supabase.auth.updateUser({ password: next })
       if (error) throw error
       setSaved(true); setCurrent(''); setNext(''); setConfirm('')
-      setTimeout(() => setSaved(false), 2000)
+      setTimeout(() => setSaved(false), 2500)
     } catch (err) {
       setMsg({ type: 'error', text: err.message })
     } finally { setLoading(false) }
@@ -178,16 +305,25 @@ function AppearanceSection() {
   const { settings, updateSettings } = useSettings()
   const [saved, setSaved] = useState(false)
   const [loading, setLoading] = useState(false)
-  const [local, setLocal] = useState({ fontId: settings.fontId, compactMode: settings.compactMode, showReadingTime: settings.showReadingTime, showAuthor: settings.showAuthor })
+  const [msg, setMsg] = useState(null)
+  const [local, setLocal] = useState({
+    fontId: settings.fontId,
+    compactMode: settings.compactMode,
+    showReadingTime: settings.showReadingTime,
+    showAuthor: settings.showAuthor,
+  })
   useEffect(() => {
     setLocal({ fontId: settings.fontId, compactMode: settings.compactMode, showReadingTime: settings.showReadingTime, showAuthor: settings.showAuthor })
   }, [settings.fontId, settings.compactMode, settings.showReadingTime, settings.showAuthor])
 
   const handleSave = async () => {
-    setLoading(true)
-    await updateSettings(local)
-    setSaved(true); setTimeout(() => setSaved(false), 2000)
-    setLoading(false)
+    setLoading(true); setMsg(null)
+    try {
+      await updateSettings(local)
+      setSaved(true); setTimeout(() => setSaved(false), 2500)
+    } catch (err) {
+      setMsg({ type: 'error', text: `Save failed: ${err.message}` })
+    } finally { setLoading(false) }
   }
 
   return (
@@ -214,25 +350,26 @@ function AppearanceSection() {
       <div className="border-t border-stone-50 dark:border-stone-800 pt-4 space-y-3">
         <p className="text-xs font-medium text-stone-600 dark:text-stone-400">Article display</p>
         {[
-          { key: 'compactMode', label: 'Compact mode', hint: 'Reduce padding between articles' },
-          { key: 'showReadingTime', label: 'Show reading time', hint: 'Estimate on each article card' },
-          { key: 'showAuthor', label: 'Show author', hint: 'Display author name on articles' },
+          { key: 'compactMode',     label: 'Compact mode',       hint: 'Reduce padding between articles' },
+          { key: 'showReadingTime', label: 'Show reading time',  hint: 'Estimate on each article card' },
+          { key: 'showAuthor',      label: 'Show author',        hint: 'Display author name on articles' },
         ].map(({ key, label, hint }) => (
-          <label key={key} className="flex items-center justify-between cursor-pointer group">
+          <label key={key} className="flex items-center justify-between cursor-pointer">
             <div>
               <p className="text-sm text-stone-700 dark:text-stone-300">{label}</p>
               <p className="text-xs text-stone-400 dark:text-stone-500">{hint}</p>
             </div>
             <div onClick={() => setLocal(p => ({ ...p, [key]: !p[key] }))}
-              className={`relative w-10 h-5 rounded-full transition-colors ${local[key] ? 'bg-brand-600' : 'bg-stone-200 dark:bg-stone-700'}`}>
+              className={`relative w-10 h-5 rounded-full transition-colors cursor-pointer ${local[key] ? 'bg-brand-600' : 'bg-stone-200 dark:bg-stone-700'}`}>
               <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${local[key] ? 'translate-x-5' : 'translate-x-0.5'}`} />
             </div>
           </label>
         ))}
       </div>
 
-      <div className="pt-1">
+      <div className="pt-1 flex items-center gap-3">
         <SaveButton loading={loading} saved={saved} onClick={handleSave} />
+        <StatusMsg msg={msg} />
       </div>
     </Section>
   )
@@ -248,6 +385,7 @@ function DateTimeSection() {
   })
   const [loading, setLoading] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [msg, setMsg] = useState(null)
   const [tzSearch, setTzSearch] = useState('')
   useEffect(() => {
     setLocal({ dateFormat: settings.dateFormat, timeFormat: settings.timeFormat, timezone: settings.timezone })
@@ -258,14 +396,14 @@ function DateTimeSection() {
     : TIMEZONES
 
   const handleSave = async () => {
-    setLoading(true)
-    await updateSettings(local)
-    setSaved(true); setTimeout(() => setSaved(false), 2000)
-    setLoading(false)
+    setLoading(true); setMsg(null)
+    try {
+      await updateSettings(local)
+      setSaved(true); setTimeout(() => setSaved(false), 2500)
+    } catch (err) {
+      setMsg({ type: 'error', text: `Save failed: ${err.message}` })
+    } finally { setLoading(false) }
   }
-
-  const now = new Date()
-  // Preview is rendered inline in the component below
 
   return (
     <Section icon={Calendar} title="Date & Time" description="How dates and times appear throughout the app.">
@@ -342,7 +480,10 @@ function DateTimeSection() {
         </p>
       </div>
 
-      <SaveButton loading={loading} saved={saved} onClick={handleSave} />
+      <div className="flex items-center gap-3">
+        <SaveButton loading={loading} saved={saved} onClick={handleSave} />
+        <StatusMsg msg={msg} />
+      </div>
     </Section>
   )
 }
@@ -353,13 +494,17 @@ function ReadingSection() {
   const [local, setLocal] = useState({ articlesPerPage: settings.articlesPerPage })
   const [loading, setLoading] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [msg, setMsg] = useState(null)
   useEffect(() => { setLocal({ articlesPerPage: settings.articlesPerPage }) }, [settings.articlesPerPage])
 
   const handleSave = async () => {
-    setLoading(true)
-    await updateSettings(local)
-    setSaved(true); setTimeout(() => setSaved(false), 2000)
-    setLoading(false)
+    setLoading(true); setMsg(null)
+    try {
+      await updateSettings(local)
+      setSaved(true); setTimeout(() => setSaved(false), 2500)
+    } catch (err) {
+      setMsg({ type: 'error', text: `Save failed: ${err.message}` })
+    } finally { setLoading(false) }
   }
 
   return (
@@ -376,7 +521,10 @@ function ReadingSection() {
           ))}
         </div>
       </Field>
-      <SaveButton loading={loading} saved={saved} onClick={handleSave} />
+      <div className="flex items-center gap-3">
+        <SaveButton loading={loading} saved={saved} onClick={handleSave} />
+        <StatusMsg msg={msg} />
+      </div>
     </Section>
   )
 }
@@ -393,11 +541,8 @@ function DangerSection() {
     if (deleteInput !== 'DELETE') return
     setLoading(true)
     try {
-      // Delete all user data then sign out
-      // Actual auth user deletion requires a server-side call — we clear data and sign out
       await supabase.from('articles').delete().eq('user_id', user.id)
       await supabase.from('feeds').delete().eq('user_id', user.id)
-      await supabase.from('folders').delete().eq('user_id', user.id)
       await supabase.from('profiles').delete().eq('id', user.id)
       await signOut()
     } catch (err) {
@@ -421,7 +566,7 @@ function DangerSection() {
               This will permanently delete all your feeds, articles, bookmarks and settings. This cannot be undone.
             </p>
           </div>
-          <Field label={`Type DELETE to confirm`}>
+          <Field label="Type DELETE to confirm">
             <input type="text" value={deleteInput} onChange={e => setDeleteInput(e.target.value)}
               placeholder="DELETE"
               className="w-full px-3 py-2.5 border border-red-200 dark:border-red-800 bg-white dark:bg-stone-800 text-stone-900 dark:text-stone-100 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-500" />
@@ -437,7 +582,7 @@ function DangerSection() {
               {loading ? 'Deleting...' : 'Delete account'}
             </button>
           </div>
-          <StatusMsg msg={msg} />
+          {msg && <p className="text-xs text-red-500">{msg.text}</p>}
         </div>
       )}
     </Section>
@@ -446,15 +591,16 @@ function DangerSection() {
 
 // ── Main Settings page ────────────────────────────────────────────
 export default function SettingsView() {
-  const [activeTab, setActiveTab] = useState('profile')
+  const [activeTab, setActiveTab] = useState('diagnostics')
 
   const tabs = [
-    { id: 'profile',    label: 'Profile',    icon: User },
-    { id: 'appearance', label: 'Appearance',  icon: Type },
-    { id: 'datetime',   label: 'Date & Time', icon: Clock },
-    { id: 'reading',    label: 'Reading',     icon: Layout },
-    { id: 'security',   label: 'Security',    icon: Lock },
-    { id: 'danger',     label: 'Danger zone', icon: Trash2 },
+    { id: 'diagnostics', label: 'Diagnostics', icon: Activity },
+    { id: 'profile',     label: 'Profile',     icon: User },
+    { id: 'appearance',  label: 'Appearance',  icon: Type },
+    { id: 'datetime',    label: 'Date & Time', icon: Clock },
+    { id: 'reading',     label: 'Reading',     icon: Layout },
+    { id: 'security',    label: 'Security',    icon: Lock },
+    { id: 'danger',      label: 'Danger zone', icon: Trash2 },
   ]
 
   return (
@@ -464,28 +610,29 @@ export default function SettingsView() {
         <p className="text-sm text-stone-500 dark:text-stone-400 mt-0.5">Manage your account and preferences.</p>
       </div>
 
-      {/* Tab nav */}
       <div className="flex gap-1 mb-6 flex-wrap">
         {tabs.map(({ id, label, icon: Icon }) => (
           <button key={id} onClick={() => setActiveTab(id)}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
               activeTab === id
                 ? 'bg-brand-600 text-white'
-                : 'bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-700 text-stone-500 dark:text-stone-400 hover:text-stone-700 dark:hover:text-stone-300'
-            } ${id === 'danger' && activeTab !== 'danger' ? 'text-red-500 dark:text-red-400 border-red-100 dark:border-red-900/50' : ''}`}>
+                : id === 'danger'
+                  ? 'bg-white dark:bg-stone-900 border border-red-100 dark:border-red-900/50 text-red-500 dark:text-red-400 hover:text-red-700'
+                  : 'bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-700 text-stone-500 dark:text-stone-400 hover:text-stone-700 dark:hover:text-stone-300'
+            }`}>
             <Icon className="w-3.5 h-3.5" />{label}
           </button>
         ))}
       </div>
 
-      {/* Tab content */}
       <div className="max-w-xl">
-        {activeTab === 'profile'    && <ProfileSection />}
-        {activeTab === 'appearance' && <AppearanceSection />}
-        {activeTab === 'datetime'   && <DateTimeSection />}
-        {activeTab === 'reading'    && <ReadingSection />}
-        {activeTab === 'security'   && <PasswordSection />}
-        {activeTab === 'danger'     && <DangerSection />}
+        {activeTab === 'diagnostics' && <DiagnosticPanel />}
+        {activeTab === 'profile'     && <ProfileSection />}
+        {activeTab === 'appearance'  && <AppearanceSection />}
+        {activeTab === 'datetime'    && <DateTimeSection />}
+        {activeTab === 'reading'     && <ReadingSection />}
+        {activeTab === 'security'    && <PasswordSection />}
+        {activeTab === 'danger'      && <DangerSection />}
       </div>
     </div>
   )

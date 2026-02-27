@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { ExternalLink, Bookmark, BookmarkCheck, Clock, Timer, Share2, Twitter, Link2, Check, BookMarked, Loader2, MailOpen, Mail, CheckSquare } from 'lucide-react'
 import { formatDistanceToNow, parseISO } from 'date-fns'
 import { toggleBookmark, markArticleRead, markArticleUnread, toggleReadLater } from '../lib/feedsService'
@@ -27,32 +27,62 @@ function formatDate(dateStr) {
 
 function ShareMenu({ article, onClose }) {
   const [copied, setCopied] = useState(false)
+
+  const share = (e, url) => {
+    e.stopPropagation()
+    window.open(url, '_blank', 'noopener,noreferrer')
+    onClose()
+  }
+
   const copyLink = async (e) => {
     e.stopPropagation()
-    try { await navigator.clipboard.writeText(article.link); setCopied(true); setTimeout(() => { setCopied(false); onClose() }, 1500) } catch {}
+    try {
+      await navigator.clipboard.writeText(article.link)
+      setCopied(true)
+      setTimeout(() => { setCopied(false); onClose() }, 1500)
+    } catch {}
   }
-  const shareToX = (e) => {
+
+  const nativeShare = async (e) => {
     e.stopPropagation()
-    window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(`${article.title} ${article.link}`)}`, '_blank', 'noopener')
-    onClose()
+    try {
+      await navigator.share({ title: article.title, url: article.link })
+      onClose()
+    } catch {}
   }
-  const shareToWhatsApp = (e) => {
-    e.stopPropagation()
-    window.open(`https://wa.me/?text=${encodeURIComponent(`${article.title}\n${article.link}`)}`, '_blank', 'noopener')
-    onClose()
-  }
+
+  const text = encodeURIComponent(article.title)
+  const url  = encodeURIComponent(article.link)
+  const both = encodeURIComponent(`${article.title} ${article.link}`)
+
+  const platforms = [
+    { label: 'Copy link',   icon: copied ? '✓' : '🔗', action: copyLink, highlight: copied },
+    ...(navigator.share ? [{ label: 'Share…', icon: '↗', action: nativeShare }] : []),
+    { label: 'X / Twitter', icon: '𝕏',  action: e => share(e, `https://twitter.com/intent/tweet?text=${both}`) },
+    { label: 'WhatsApp',    icon: '💬', action: e => share(e, `https://wa.me/?text=${encodeURIComponent(article.title + '\n' + article.link)}`) },
+    { label: 'LinkedIn',    icon: 'in', action: e => share(e, `https://www.linkedin.com/sharing/share-offsite/?url=${url}`) },
+    { label: 'Telegram',    icon: '✈️', action: e => share(e, `https://t.me/share/url?url=${url}&text=${text}`) },
+    { label: 'Facebook',    icon: 'f',  action: e => share(e, `https://www.facebook.com/sharer/sharer.php?u=${url}`) },
+    { label: 'Email',       icon: '✉️', action: e => share(e, `mailto:?subject=${text}&body=${url}`) },
+  ]
+
   return (
-    <div className="absolute right-0 top-full mt-1 w-44 bg-white dark:bg-stone-800 border border-stone-100 dark:border-stone-700 rounded-xl shadow-lg z-20 overflow-hidden" onClick={e => e.stopPropagation()}>
-      <button onClick={copyLink} className="w-full flex items-center gap-2.5 px-3 py-2.5 text-xs text-stone-700 dark:text-stone-300 hover:bg-stone-50 dark:hover:bg-stone-700 transition-colors">
-        {copied ? <Check className="w-3.5 h-3.5 text-brand-600" /> : <Link2 className="w-3.5 h-3.5 text-stone-400" />}
-        {copied ? 'Copied!' : 'Copy link'}
-      </button>
-      <button onClick={shareToX} className="w-full flex items-center gap-2.5 px-3 py-2.5 text-xs text-stone-700 dark:text-stone-300 hover:bg-stone-50 dark:hover:bg-stone-700 transition-colors border-t border-stone-50 dark:border-stone-700">
-        <Twitter className="w-3.5 h-3.5 text-stone-400" />Share to X
-      </button>
-      <button onClick={shareToWhatsApp} className="w-full flex items-center gap-2.5 px-3 py-2.5 text-xs text-stone-700 dark:text-stone-300 hover:bg-stone-50 dark:hover:bg-stone-700 transition-colors border-t border-stone-50 dark:border-stone-700">
-        <Share2 className="w-3.5 h-3.5 text-stone-400" />Share to WhatsApp
-      </button>
+    <div
+      className="absolute right-0 top-full mt-1 w-48 bg-white dark:bg-stone-800 border border-stone-100 dark:border-stone-700 rounded-xl shadow-xl z-20 overflow-hidden py-1"
+      onClick={e => e.stopPropagation()}
+    >
+      <p className="px-3 py-1.5 text-xs font-semibold text-stone-400 dark:text-stone-500 uppercase tracking-wide">Share article</p>
+      {platforms.map(({ label, icon, action, highlight }) => (
+        <button key={label} onClick={action}
+          className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs transition-colors ${
+            highlight
+              ? 'text-brand-600 dark:text-brand-400 bg-brand-50 dark:bg-brand-900/20'
+              : 'text-stone-700 dark:text-stone-300 hover:bg-stone-50 dark:hover:bg-stone-700'
+          }`}>
+          <span className="w-5 text-center font-medium text-stone-500 dark:text-stone-400">{icon}</span>
+          {label}
+        </button>
+      ))}
     </div>
   )
 }
@@ -67,6 +97,43 @@ export default function ArticleCard({ article, onUpdate, selected = false, onSel
   const [fullTextLoading, setFullTextLoading] = useState(false)
   const [fullTextFailed, setFullTextFailed] = useState(false)
   const [expanded, setExpanded] = useState(false)
+  const [readingProgress, setReadingProgress] = useState(0)
+  const contentRef = useRef(null)
+  const progressKey = `reading-progress-${article.id}`
+
+  // Load saved progress when expanded
+  useEffect(() => {
+    if (expanded && contentRef.current) {
+      const saved = localStorage.getItem(progressKey)
+      if (saved) {
+        const pct = parseFloat(saved)
+        setReadingProgress(pct)
+        // Scroll to saved position after render
+        setTimeout(() => {
+          if (contentRef.current) {
+            const el = contentRef.current
+            el.scrollTop = (pct / 100) * (el.scrollHeight - el.clientHeight)
+          }
+        }, 100)
+      }
+    }
+  }, [expanded])
+
+  // Track scroll progress
+  const handleScroll = useCallback((e) => {
+    const el = e.target
+    const scrollable = el.scrollHeight - el.clientHeight
+    if (scrollable <= 0) return
+    const pct = Math.round((el.scrollTop / scrollable) * 100)
+    setReadingProgress(pct)
+    localStorage.setItem(progressKey, pct)
+    // Mark as fully read when >85%
+    if (pct >= 85 && !read) {
+      setRead(true)
+      markArticleRead(article.id)
+      onUpdate?.({ ...article, is_read: true })
+    }
+  }, [article.id, read])
 
   const displayText = fullText || article.description
   const readingTime = formatReadingTime(estimateReadingTime(
@@ -195,7 +262,7 @@ export default function ArticleCard({ article, onUpdate, selected = false, onSel
 
             {/* Full text (shown when expanded) */}
             {expanded && (
-              <div className="mt-1">
+              <div className="mt-2">
                 {fullTextLoading && (
                   <div className="space-y-2 mt-2">
                     {[...Array(4)].map((_, i) => (
@@ -204,9 +271,34 @@ export default function ArticleCard({ article, onUpdate, selected = false, onSel
                   </div>
                 )}
                 {!fullTextLoading && fullText && (
-                  <p className="text-xs text-stone-600 dark:text-stone-300 leading-relaxed whitespace-pre-line">
-                    {fullText}
-                  </p>
+                  <div>
+                    {/* Reading progress bar */}
+                    {readingProgress > 0 && (
+                      <div className="mb-2">
+                        <div className="h-1 bg-stone-100 dark:bg-stone-800 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-brand-500 rounded-full transition-all duration-300"
+                            style={{ width: `${readingProgress}%` }}
+                          />
+                        </div>
+                        <p className="text-xs text-stone-400 dark:text-stone-500 mt-0.5">
+                          {readingProgress >= 85 ? '✓ Read' : `${readingProgress}% read`}
+                          {readingProgress > 0 && readingProgress < 85 && (
+                            <span className="ml-1">· progress saved</span>
+                          )}
+                        </p>
+                      </div>
+                    )}
+                    <div
+                      ref={contentRef}
+                      onScroll={handleScroll}
+                      className="max-h-96 overflow-y-auto pr-1 scrollbar-thin"
+                    >
+                      <p className="text-xs text-stone-600 dark:text-stone-300 leading-relaxed whitespace-pre-line">
+                        {fullText}
+                      </p>
+                    </div>
+                  </div>
                 )}
                 {!fullTextLoading && fullTextFailed && article.description && (
                   <p className="text-xs text-stone-500 dark:text-stone-400 leading-relaxed">

@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react'
 import { NavLink } from 'react-router-dom'
-import { Rss, LayoutDashboard, Bookmark, Plus, LogOut, BookOpen, BookMarked, BarChart2, Search, Sun, Moon, Menu, X, Keyboard, Settings } from 'lucide-react'
+import { Rss, LayoutDashboard, Bookmark, Plus, LogOut, BookOpen, BookMarked, BarChart2, Search, Sun, Moon, Menu, X, Keyboard, Settings, Compass, Mail } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { useUnread } from '../contexts/UnreadContext'
 import { useTheme } from '../contexts/ThemeContext'
 import { useSettings } from '../contexts/SettingsContext'
 import { getFeeds } from '../lib/feedsService'
 
-export default function Sidebar({ onAddFeed, onSearch, onHelp, mobileOpen, onMobileClose }) {
+export default function Sidebar({ onAddFeed, onDiscover, onNewsletter, onSearch, onHelp, mobileOpen, onMobileClose }) {
   const { user, signOut } = useAuth()
   const { unreadCount, refreshUnreadCount } = useUnread()
   const { dark, toggleTheme } = useTheme()
@@ -35,8 +35,8 @@ export default function Sidebar({ onAddFeed, onSearch, onHelp, mobileOpen, onMob
           <div className="w-7 h-7 bg-brand-600 rounded-lg flex items-center justify-center">
             <Rss className="w-3.5 h-3.5 text-white" />
           </div>
-          <span className="font-display font-bold text-lg text-stone-900 dark:text-stone-100">
-            my<span className="text-brand-600">Feed</span>
+          <span className="font-display font-bold text-lg">
+            <span className="text-stone-900 dark:text-stone-100">my</span><span className="text-brand-600">Feed</span>
           </span>
         </div>
         {onMobileClose && (
@@ -57,6 +57,14 @@ export default function Sidebar({ onAddFeed, onSearch, onHelp, mobileOpen, onMob
         <button onClick={onAddFeed}
           className="w-full flex items-center gap-2 px-3 py-2 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700 transition-colors">
           <Plus className="w-4 h-4" />Add source
+        </button>
+        <button onClick={onDiscover}
+          className="w-full flex items-center gap-2 px-3 py-2 bg-stone-50 dark:bg-stone-800 text-stone-600 dark:text-stone-400 text-sm font-medium rounded-lg hover:bg-stone-100 dark:hover:bg-stone-700 transition-colors">
+          <Compass className="w-4 h-4" />Discover feeds
+        </button>
+        <button onClick={onNewsletter}
+          className="w-full flex items-center gap-2 px-3 py-2 bg-stone-50 dark:bg-stone-800 text-stone-600 dark:text-stone-400 text-sm font-medium rounded-lg hover:bg-stone-100 dark:hover:bg-stone-700 transition-colors">
+          <Mail className="w-4 h-4" />Newsletters
         </button>
       </div>
 
