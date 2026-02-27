@@ -3,9 +3,8 @@ import { RefreshCw, Inbox, CheckCheck, X, CheckSquare, Square, MailOpen } from '
 import { useOutletContext } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { useUnread } from '../contexts/UnreadContext'
-import { getFeeds, getArticles, upsertArticles, updateFeedHealth, markArticlesBulk } from '../lib/feedsService'
+import { getFeeds, getArticles, upsertArticles, updateFeedHealth, markArticlesBulk, markAllArticlesRead } from '../lib/feedsService'
 import { fetchRSSFeed } from '../lib/rssParser'
-import { supabase } from '../lib/supabase'
 import ArticleCard from '../components/ArticleCard'
 
 const PAGE_SIZE = 20
@@ -133,7 +132,7 @@ export default function FeedView() {
   const handleMarkAllRead = async () => {
     setMarkingRead(true)
     try {
-      await supabase.from('articles').update({ is_read: true }).eq('user_id', user.id).eq('is_read', false)
+      await markAllArticlesRead(user.id)
       // After marking all read, reload with current filter
       await loadArticles(activeCategory, 0, false, readFilter)
       setOffset(0)

@@ -182,3 +182,12 @@ export async function addFeedsBulk(feedRows) {
   if (error) throw error
   return data
 }
+
+export async function markAllArticlesRead(userId) {
+  const { error } = await supabase
+    .from('articles')
+    .update({ is_read: true })
+    .eq('user_id', userId)
+    .eq('is_read', false)
+  if (error) throw error
+}
